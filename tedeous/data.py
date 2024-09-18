@@ -549,8 +549,8 @@ class Conditions():
                         bnd_bc1 = torch.cat(bc1).float()
                         bnd_bc2 = torch.cat(bc2).float()
 
-                    result = [bnd_ic1, bnd_ic2, bnd_bc1, bnd_bc2]
-                    var_lst.append(check_device(result[count]).to(dtype))
+                        result = [bnd_ic1, bnd_ic2, bnd_bc1, bnd_bc2]
+                        var_lst.append(check_device(result[count]).to(dtype))
 
             if self.method == 'PINN':
                 bnd_grid = torch.cartesian_prod(*var_lst).to(dtype)
