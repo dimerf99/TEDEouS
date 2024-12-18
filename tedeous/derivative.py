@@ -1,7 +1,7 @@
 """Module of derivative calculations.
 """
 
-from typing import Any, Union, List, Tuple
+from typing import Any, Union, List, Tuple, Callable
 import numpy as np
 from scipy import linalg
 import torch
@@ -55,7 +55,10 @@ class Derivative_NN(DerivativeInt):
                 for k, grid in enumerate(scheme):
                     grid_sum += self.model(grid)[:, term['var'][j]].reshape(-1, 1)\
                         * term[dif_dir][1][j][k]
-                der_term = der_term * grid_sum ** term['pow'][j]
+                if isinstance(term['pow'][j], (int, float)):
+                    der_term = der_term * grid_sum ** term['pow'][j]
+                elif isinstance(term['pow'][j], Callable):
+                    der_term = term['pow'][j](der_term * grid_sum)
             der_term = coeff * der_term
         elif self.method == 'PI_DeepONet':
             for j, scheme in enumerate(term[dif_dir][0]):
@@ -77,7 +80,8 @@ class Derivative_autograd(DerivativeInt):
     def __init__(self,
                  model: torch.nn.Module,
                  method: str = 'PINN',
-                 u: torch.Tensor = None):
+                 u: torch.Tensor = None,
+                 adjoint_model: torch.nn.Module = None):
         """
         Args:
             model (torch.nn.Module): model of *autograd* mode.
@@ -85,6 +89,7 @@ class Derivative_autograd(DerivativeInt):
         self.model = model
         self.method = method
         self.u = u
+        self.adjoint_model = adjoint_model
 
     # @staticmethod
     def _nn_autograd(self,
@@ -106,28 +111,54 @@ class Derivative_autograd(DerivativeInt):
                 in corresponding axis.
         """
 
-        points.requires_grad = True
-        fi, grads = None, None
+        # try:
+        #     points.requires_grad = True
+        # except:
+        #     pass
+        #
+        # fi, grads = None, None
+        #
+        # if self.method == 'PINN':
+        #     fi = model(points)[:, var].sum(0)
+        # elif self.method == 'PI_DeepONet':
+        #     fi = model(self.u, points)
+        #
+        # # based version - original PINN
+        # for ax in axis:
+        #     if self.method == 'PINN':
+        #         grads, = torch.autograd.grad(fi, points, create_graph=True)
+        #         try:
+        #             fi = grads[:, ax].sum()
+        #         except:
+        #             fi = grads[:, 0].sum()
+        #     elif self.method == 'PI_DeepONet':
+        #         grads, = torch.autograd.grad(fi, points, torch.ones_like(fi), create_graph=True)
+        #         fi = grads[:, ax]
+        # try:
+        #     gradient_full = grads[:, axis[-1]].reshape(-1, 1)
+        # except:
+        #     gradient_full = grads[:, 0].reshape(-1, 1)
+        #
+        # return gradient_full
 
-        if self.method == 'PINN':
-            fi = model(points)[:, var].sum(0)
-        elif self.method == 'PI_DeepONet':
-            fi = model(self.u, points)
+        points.requires_grad = True
+        fi = model(points)[:, var].sum(0)
 
         for ax in axis:
-            if self.method == 'PINN':
-                grads, = torch.autograd.grad(fi, points, create_graph=True)
-                fi = grads[:, ax].sum()
-            elif self.method == 'PI_DeepONet':
-                grads, = torch.autograd.grad(fi, points, torch.ones_like(fi), create_graph=True)
-                fi = grads[:, ax]
+            grads, = torch.autograd.grad(fi, points, create_graph=True)
+            # if normal_derivative is True:
+            #     normals = grads / torch.norm(grads, dim=1, keepdim=True)
+            #     fi = torch.sum(grads * normals, dim=1)
+            # else:
+            fi = grads[:, ax].sum()
 
         gradient_full = grads[:, axis[-1]].reshape(-1, 1)
         return gradient_full
 
     def take_derivative(self,
                         term: dict,
-                        grid_points: torch.Tensor) -> torch.Tensor:
+                        grid_points: torch.Tensor,
+                        operator: str = None) -> torch.Tensor:
         """ Auxiliary function serves for single differential operator resulting field
         derivation.
 
@@ -139,8 +170,52 @@ class Derivative_autograd(DerivativeInt):
             der_term (torch.Tensor): resulting field, computed on a grid.
         """
 
+        # dif_dir = list(term.keys())[1]
+        # # it is maybe int, function of grid or torch.Tensor
+        # if callable(term['coeff']):
+        #     coeff = term['coeff'](grid_points).reshape(-1, 1)
+        # else:
+        #     coeff = term['coeff']
+        #
+        # flag = False
+        # try:
+        #     self.model(grid_points)
+        # except:
+        #     self.adjoint_model(grid_points)
+        #     flag = True
+        #
+        # der_term = 1.
+        # for j, derivative in enumerate(term[dif_dir]):
+        #     if self.method == 'PINN':
+        #         if derivative == [None]:
+        #             if flag is False:
+        #                 der = self.model(grid_points)[:, term['var'][j]].reshape(-1, 1)
+        #             else:
+        #                 der = self.adjoint_model(grid_points)[:, term['var'][j]].reshape(-1, 1)
+        #         else:
+        #             if flag is False:
+        #                 der = self._nn_autograd(
+        #                     self.model, grid_points, term['var'][j], axis=derivative)
+        #             else:
+        #                 der = self._nn_autograd(
+        #                     self.adjoint_model, grid_points, term['var'][j], axis=derivative)
+        #
+        #         der_term = der_term * der ** term['pow'][j]
+        #
+        #     elif self.method == 'PI_DeepONet':
+        #         if derivative == [None]:
+        #             der = self.model(self.u, grid_points).reshape(-1, 1)
+        #         else:
+        #             der = self._nn_autograd(
+        #                 self.model, grid_points, term['var'][j], axis=derivative)
+        #         der_term = der_term * der ** term['pow'][j]
+        #
+        # der_term = coeff * der_term
+        #
+        # return der_term
+
         dif_dir = list(term.keys())[1]
-        # it is may be int, function of grid or torch.Tensor
+
         if callable(term['coeff']):
             coeff = term['coeff'](grid_points).reshape(-1, 1)
         else:
@@ -148,22 +223,17 @@ class Derivative_autograd(DerivativeInt):
 
         der_term = 1.
         for j, derivative in enumerate(term[dif_dir]):
-            if self.method == 'PINN':
-                if derivative == [None]:
-                    der = self.model(grid_points)[:, term['var'][j]].reshape(-1, 1)
-                else:
-                    der = self._nn_autograd(
-                        self.model, grid_points, term['var'][j], axis=derivative)
-                der_term = der_term * der ** term['pow'][j]
-            elif self.method == 'PI_DeepONet':
-                if derivative == [None]:
-                    der = self.model(self.u, grid_points).reshape(-1, 1)
-                else:
-                    der = self._nn_autograd(
-                        self.model, grid_points, term['var'][j], axis=derivative)
-                der_term = der_term * der ** term['pow'][j]
-        der_term = coeff * der_term
+            if derivative == [None]:
+                der = self.model(grid_points)[:, term['var'][j]].reshape(-1, 1)
+            else:
+                der = self._nn_autograd(self.model, grid_points, term['var'][j], axis=derivative)
 
+            if isinstance(term['pow'][j], (int, float)):
+                der_term = der_term * der ** term['pow'][j]
+            elif isinstance(term['pow'][j], Callable):
+                der_term = term['pow'][j](der_term * der)
+
+        der_term = coeff * der_term
         return der_term
 
 
@@ -349,7 +419,10 @@ class Derivative_mat(DerivativeInt):
                         continue
                     h = self._step_h(grid_points)[axis]
                     prod = self._derivative(prod, h, axis)
-            der_term = der_term * prod ** term['pow'][j]
+            if isinstance(term['pow'][j], (int, float)):
+                der_term = der_term * prod ** term['pow'][j]
+            elif isinstance(term['pow'][j], Callable):
+                der_term = term['pow'][j](der_term * prod)
         if callable(term['coeff']) is True:
             der_term = term['coeff'](grid_points) * der_term
         else:
@@ -366,7 +439,8 @@ class Derivative():
                  model: Union[torch.nn.Module, torch.Tensor],
                  derivative_points: int,
                  method: str = 'PINN',
-                 u: torch.Tensor = None):
+                 u: torch.Tensor = None,
+                 adjoint_model: Union[torch.nn.Module, torch.Tensor] = None):
         """_summary_
 
         Args:
@@ -381,6 +455,7 @@ class Derivative():
         self.derivative_points = derivative_points
         self.method = method
         self.u = u
+        self.adjoint_model = adjoint_model
 
     def set_strategy(self,
                      strategy: str) -> Union[Derivative_NN, Derivative_autograd, Derivative_mat]:
@@ -395,7 +470,21 @@ class Derivative():
             return Derivative_NN(self.model)
 
         elif strategy == 'autograd':
-            return Derivative_autograd(self.model, method=self.method, u=self.u)
+            return Derivative_autograd(self.model, method=self.method, u=self.u, adjoint_model=self.adjoint_model)
 
         elif strategy == 'mat':
             return Derivative_mat(self.model, self.derivative_points)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
