@@ -143,8 +143,6 @@ class CachePreprocessing:
 
             solver_model, cache_model = self._model_reform(self.solution_cls.model, model)
 
-            s = solver_model[0].in_features
-            c = cache_model[0].in_features
             if cache_model[0].in_features != solver_model[0].in_features:
                 continue
             try:
