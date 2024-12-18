@@ -33,7 +33,10 @@ class Solution():
         tol: float = 0,
         derivative_points: int = 2,
         method: str = 'PINN',
-        u: torch.Tensor = None):
+        u: torch.Tensor = None,
+        adjoint_operator: bool = False,
+        adjoint_model: Union[torch.nn.Sequential, torch.Tensor] = None,
+        batch_size: int = None):
 
         """
         Args:
@@ -46,7 +49,7 @@ class Solution():
             lambda_bound (_type_): regularization parameter for boundary term in loss.
             tol (float, optional): penalty in *casual loss*. Defaults to 0.
             derivative_points (int, optional): points number for derivative calculation.
-            For details to Derivative_mat class.. Defaults to 2.
+            For details to Derivative_mat class. Defaults to 2.
         """
 
         self.grid = check_device(grid)
@@ -70,18 +73,22 @@ class Solution():
         self.tol = tol
         self.derivative_points = derivative_points
         self.method = method
+        self.adjoint_operator = adjoint_operator
+        self.adjoint_model = adjoint_model
+
+        self.batch_size = batch_size
+        if self.batch_size is None:
+            self.n_t_operation = None
 
         self.operator = Operator(self.grid, prepared_operator, self.model,
-                                 self.mode, weak_form, derivative_points,
-                                 method=self.method, u=self.u)
+                                 self.mode, weak_form, derivative_points)
 
         self.boundary = Bounds(self.grid, self.prepared_bconds, self.model,
-                               self.mode, weak_form, derivative_points,
-                               method=self.method, u=self.u)
+                               self.mode, weak_form, derivative_points)
 
         self.operator.derivative = Derivative(self.model, self.derivative_points,
-                                              method=self.method, u=self.u).set_strategy(
-            self.mode).take_derivative
+                                              method=self.method, u=self.u, adjoint_model=self.adjoint_model)\
+            .set_strategy(self.mode).take_derivative
 
         # Losses class mustn`t be changed
         self.loss_cls = Losses(self.mode, self.weak_form, self.n_t, self.tol)
@@ -117,17 +124,15 @@ class Solution():
         """
         self.model = new_model
         self.operator.model = new_model
-        self.operator.derivative = Derivative(new_model, self.derivative_points, method=self.method, u=self.u).set_strategy(
-            self.mode).take_derivative
+        self.operator.derivative = Derivative(new_model, self.derivative_points, method=self.method, u=self.u)\
+            .set_strategy(self.mode).take_derivative
         self.boundary.model = new_model
         self.boundary.operator = Operator(self.grid,
                                           self.prepared_bconds,
                                           new_model,
                                           self.mode,
                                           self.weak_form,
-                                          self.derivative_points,
-                                          method=self.method,
-                                          u=self.u)
+                                          self.derivative_points)
 
     def evaluate(self,
                  save_graph: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
