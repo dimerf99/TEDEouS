@@ -1,6 +1,6 @@
 """Module for operatoins with operator and boundaru con-ns."""
 
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Callable
 import torch
 
 from tedeous.points_type import Points_type
@@ -8,6 +8,7 @@ from tedeous.derivative import Derivative
 from tedeous.device import device_type, check_device
 from tedeous.utils import PadTransform
 
+from torch.utils.data import DataLoader
 
 def integration(func: torch.Tensor,
                 grid: torch.Tensor,
@@ -97,8 +98,7 @@ class Operator():
                  mode: str,
                  weak_form: list[callable],
                  derivative_points: int,
-                 method: str = 'PINN',
-                 u: torch.Tensor = None):
+                 batch_size: int = None):
         """
         Args:
             grid (torch.Tensor): grid (domain discretization).
@@ -108,24 +108,37 @@ class Operator():
             weak_form (list[callable]): list with basis functions (if the form is *weak*).
             derivative_points (int): points number for derivative calculation.
                                      For details to Derivative_mat class.
+            batch_size (int): size of batch.
         """
         self.grid = check_device(grid)
-        self.u = u
         self.prepared_operator = prepared_operator
         self.model = model.to(device_type())
         self.mode = mode
-        self.method = method
         self.weak_form = weak_form
         self.derivative_points = derivative_points
-
         if self.mode == 'NN':
             self.grid_dict = Points_type(self.grid).grid_sort()
             self.sorted_grid = torch.cat(list(self.grid_dict.values()))
         elif self.mode in ('autograd', 'mat'):
             self.sorted_grid = self.grid
-
+        self.batch_size = batch_size
+        if self.batch_size is not None:
+            self.grid_loader = DataLoader(self.sorted_grid, batch_size=self.batch_size, shuffle=True,
+                                          generator=torch.Generator(device=device_type()))
+            self.n_batches = len(self.grid_loader)
+            del self.sorted_grid
+            torch.cuda.empty_cache()
+            self.init_mini_batches()
+            self.current_batch_i = 0
         self.derivative = Derivative(self.model,
-                                self.derivative_points, method=self.method, u=self.u).set_strategy(self.mode).take_derivative
+                                self.derivative_points).set_strategy(self.mode).take_derivative
+
+    def init_mini_batches(self):
+        """ Initialization of batch iterator.
+
+        """
+        self.grid_iter = iter(self.grid_loader)
+        self.grid_batch = next(self.grid_iter)
 
     def apply_operator(self,
                        operator: list,
@@ -143,7 +156,8 @@ class Operator():
         """
 
         for term in operator:
-            dif = self.derivative(operator[term], grid_points)
+            term = operator[term]
+            dif = self.derivative(term, grid_points)
             try:
                 total += dif
             except NameError:
@@ -157,19 +171,24 @@ class Operator():
             torch.Tensor: P/O DE residual.
         """
 
+        if self.batch_size is not None:
+            sorted_grid = self.grid_batch
+            try:
+                self.grid_batch = next(self.grid_iter)
+            except: # if no batches left then reinit
+                self.init_mini_batches()
+                self.current_batch_i = -1
+        else:
+            sorted_grid = self.sorted_grid
         num_of_eq = len(self.prepared_operator)
         if num_of_eq == 1:
-            a = self.prepared_operator[0]
-            b = self.sorted_grid
-            c = self.apply_operator(self.prepared_operator[0], self.sorted_grid).reshape(-1, 1)
-
             op = self.apply_operator(
-                self.prepared_operator[0], self.sorted_grid).reshape(-1, 1)
+                self.prepared_operator[0], sorted_grid).reshape(-1,1)
         else:
             op_list = []
             for i in range(num_of_eq):
                 op_list.append(self.apply_operator(
-                    self.prepared_operator[i], self.sorted_grid).reshape(-1, 1))
+                    self.prepared_operator[i], sorted_grid).reshape(-1,1))
             op = torch.cat(op_list, 1)
         return op
 
@@ -223,14 +242,11 @@ class Bounds():
                  model: Union[torch.nn.Sequential, torch.Tensor],
                  mode: str,
                  weak_form: list[callable],
-                 derivative_points: int,
-                 method: str = 'PINN',
-                 u: torch.Tensor = None):
+                 derivative_points: int):
         """_summary_
 
         Args:
             grid (torch.Tensor): grid (domain discretization).
-            u (torch.Tensor): u-function for branch network.
             prepared_bconds (Union[list,dict]): prepared (after Equation class) baund-y con-s.
             model (Union[torch.nn.Sequential, torch.Tensor]): *mat or NN or autograd* model.
             mode (str): *mat or NN or autograd*
@@ -239,14 +255,12 @@ class Bounds():
                                      For details to Derivative_mat class.
         """
         self.grid = check_device(grid)
-        self.u = u
         self.prepared_bconds = prepared_bconds
         self.model = model.to(device_type())
         self.mode = mode
-        self.method = method
         self.operator = Operator(self.grid, self.prepared_bconds,
-                                 self.model, self.mode, weak_form, derivative_points,
-                                 method=self.method, u=self.u)
+                                       self.model, self.mode, weak_form,
+                                       derivative_points)
 
     def _apply_bconds_set(self, operator_set: list) -> torch.Tensor:
         """ Method only for *NN* mode. Calculate boundary conditions with derivatives
@@ -266,9 +280,7 @@ class Bounds():
         field_part = torch.cat(field_part)
         return field_part
 
-    def _apply_dirichlet(self,
-                         bnd: torch.Tensor,
-                         var: int) -> torch.Tensor:
+    def _apply_dirichlet(self, bnd: torch.Tensor, var: int) -> torch.Tensor:
         """ Applies Dirichlet boundary conditions.
 
         Args:
@@ -281,23 +293,13 @@ class Bounds():
             torch.Tensor: calculated boundary condition.
         """
 
-        if self.method == 'PINN':
-            if self.mode == 'NN' or self.mode == 'autograd':
-                b_op_val = self.model(bnd)[:, var].reshape(-1, 1)
-            elif self.mode == 'mat':
-                b_op_val = []
-                for position in bnd:
-                    b_op_val.append(self.model[var][position])
-                b_op_val = torch.cat(b_op_val).reshape(-1, 1)
-            return b_op_val
-        elif self.method == 'PI_DeepONet':
-            if self.mode == 'NN' or self.mode == 'autograd':
-                b_op_val = self.model(self.u, bnd).reshape(-1, 1)
-            elif self.mode == 'mat':
-                b_op_val = []
-                for position in bnd:
-                    b_op_val.append(self.model[var][position])
-                b_op_val = torch.cat(b_op_val).reshape(-1, 1)
+        if self.mode == 'NN' or self.mode == 'autograd':
+            b_op_val = self.model(bnd)[:, var].reshape(-1, 1)
+        elif self.mode == 'mat':
+            b_op_val = []
+            for position in bnd:
+                b_op_val.append(self.model[var][position])
+            b_op_val = torch.cat(b_op_val).reshape(-1, 1)
         return b_op_val
 
     def _apply_neumann(self, bnd: torch.Tensor, bop: list) -> torch.Tensor:
@@ -352,6 +354,39 @@ class Bounds():
                     b_op_val -= self._apply_neumann(bnd[i], bop).reshape(-1, 1)
         return b_op_val
 
+    def _apply_robin(self, bnd: torch.Tensor, bop: Union[list, dict], var: int) -> torch.Tensor:
+        """ Applies Robin boundary conditions.
+
+        Args:
+            bnd (torch.Tensor): boundary points of prepared boundary conditions.
+            bop (list): prepared boundary derivative operator.
+            alpha (float): coefficient for the boundary function value.
+            beta (float): coefficient for the derivative term.
+
+        Returns:
+            torch.Tensor: calculated Robin boundary condition.
+        """
+
+        alpha, *betas = [bop[list(bop.keys())[i]]['coeff'] for i in range(len(bop))]
+
+        value_term = alpha * self._apply_dirichlet(bnd, var)
+
+        derivative_term = 0
+        for beta in betas:
+            if self.mode == 'NN':
+                if isinstance(beta, (int, float)):
+                    derivative_term += beta * self._apply_bconds_set(bop)
+                elif isinstance(beta, Callable):
+                    derivative_term += beta(bnd) * self._apply_bconds_set(bop)
+            else:
+                if isinstance(beta, (int, float)):
+                    derivative_term += beta * self._apply_neumann(bnd, bop)
+                elif isinstance(beta, Callable):
+                    derivative_term += beta(bnd) * self._apply_neumann(bnd, bop)
+
+        b_op_val = value_term + derivative_term
+        return b_op_val
+
     def _apply_data(self, bnd: torch.Tensor, bop: list, var: int) -> torch.Tensor:
         """ Method for applying known data about solution.
 
@@ -381,18 +416,18 @@ class Bounds():
             torch.Tensor: calculated operator on the boundary.
         """
 
+        b_op_val = None
+
         if bcond['type'] == 'dirichlet':
-            a = bcond['bnd']
-            b = bcond['var']
             b_op_val = self._apply_dirichlet(bcond['bnd'], bcond['var'])
         elif bcond['type'] == 'operator':
             b_op_val = self._apply_neumann(bcond['bnd'], bcond['bop'])
         elif bcond['type'] == 'periodic':
-            b_op_val = self._apply_periodic(bcond['bnd'], bcond['bop'],
-                                           bcond['var'])
+            b_op_val = self._apply_periodic(bcond['bnd'], bcond['bop'], bcond['var'])
+        elif bcond['type'] == 'robin':
+            b_op_val = self._apply_robin(bcond['bnd'], bcond['bop'], bcond['var'])
         elif bcond['type'] == 'data':
-            b_op_val = self._apply_data(bcond['bnd'], bcond['bop'],
-                                           bcond['var'])
+            b_op_val = self._apply_data(bcond['bnd'], bcond['bop'], bcond['var'])
         return b_op_val
 
     def apply_bcs(self) -> Tuple[torch.Tensor, torch.Tensor, list, list]:
@@ -417,8 +452,6 @@ class Bounds():
                 true_bval_dict[bcond['type']] = torch.cat((true_bval_dict[bcond['type']],
                                                     bcond['bval'].reshape(-1)))
             except:
-                a = self.b_op_val_calc(bcond)
-                b = self.b_op_val_calc(bcond).reshape(-1)
                 bval_dict[bcond['type']] = self.b_op_val_calc(bcond).reshape(-1)
                 true_bval_dict[bcond['type']] = bcond['bval'].reshape(-1)
 
@@ -426,4 +459,3 @@ class Bounds():
                                                     bval_dict, true_bval_dict)
 
         return bval, true_bval, keys, bval_length
-
