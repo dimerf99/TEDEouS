@@ -1,9 +1,8 @@
-
 """preprocessing module for operator (equation) and boundaries.
 """
 
 from copy import deepcopy
-from typing import Union
+from typing import Union, Callable
 import numpy as np
 import torch
 
@@ -62,14 +61,14 @@ class EquationMixin:
             try:
                 operator['var']
             except:
-                if isinstance(operator['pow'], (int, float)):
+                if isinstance(operator['pow'], (int, float, Callable)):
                     operator[dif_dir] = [operator[dif_dir]]
                     operator['pow'] = [operator['pow']]
                     operator['var'] = [0]
                 elif isinstance(operator['pow'], list):
                     operator['var'] = [0 for _ in operator['pow']]
                 continue
-            if isinstance(operator['pow'], (int, float)):
+            if isinstance(operator['pow'], (int, float, Callable)):
                 operator[dif_dir] = [operator[dif_dir]]
                 operator['pow'] = [operator['pow']]
                 operator['var'] = [operator['var']]
