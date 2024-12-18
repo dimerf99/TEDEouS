@@ -731,6 +731,7 @@ class Losses():
         """
 
         bval_diff = torch.mean((bval - true_bval)**2, 0)
+        bval_diff = bval_diff.to(torch.float32)
 
         loss_bnd = bval_diff @ lambda_bound.T
         return loss_bnd, bval_diff
