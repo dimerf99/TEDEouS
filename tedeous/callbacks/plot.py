@@ -40,7 +40,7 @@ class Plots(Callback):
             fixed_axes (List[int], optional): axes with fixed values. Defaults to None.
             n_samples (int): number of fixed value samples. Defaults to 1.
             img_rows (int, optional): the number of rows in the displays with plots. Defaults to None.
-            img_cols (int, optional): the number of rows in the displays with plots. Defaults to None.
+            img_cols (int, optional): the number of cols in the displays with plots. Defaults to None.
             var_transpose (bool): whether to transpose the axes of the variables. Defaults to False.
             figsize (tuple): figure size. Defaults to (15, 8).
         """
@@ -66,7 +66,7 @@ class Plots(Callback):
         """ Defines the number of model variables (neural network outputs).
 
         Returns:
-            int: Number of output variables of the model.
+            int: number of output variables of the model.
         """
         nvars_model = None
 
@@ -91,10 +91,10 @@ class Plots(Callback):
         """ Filters a grid of points on fixed axes.
 
         Args:
-            fixed_values (List[float]): Values of the fixed axes.
+            fixed_values (List[float]): values of the fixed axes.
 
         Returns:
-            np.ndarray: Filtered grid.
+            np.ndarray: filtered grid.
         """
         if self.fixed_axes is not None:
             for axis, value in zip(self.fixed_axes, fixed_values):
