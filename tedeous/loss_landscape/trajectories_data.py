@@ -10,10 +10,14 @@ torch.serialization.add_safe_globals(
 
 
 def calculate_mean_std(state_dicts):
-    try:
-        isSpecialCase = not hasattr(state_dicts[0], 'keys')
-    except:
-        isSpecialCase = False
+    # isSpecialCase = not hasattr(state_dicts[0], 'keys')
+
+    # try:
+    #     isSpecialCase = not hasattr(state_dicts[0], 'keys')
+    # except:
+    #     isSpecialCase = False
+
+    isSpecialCase = not isinstance(state_dicts[0], dict) if state_dicts else False
 
     keys = list(state_dicts[0].state_dict().keys() if isSpecialCase else state_dicts[0].keys())
 
@@ -75,64 +79,12 @@ def get_trajectory_dataset(state_dicts, normalize=True):
     return ModelParamsDataset(state_dicts, transform=normalizer if normalize else None), normalizer
 
 
-def get_trajectory_dataloader(state_dicts, batch_size, normalize=True, shuffle=True):
+def get_trajectory_dataloader(state_dicts, batch_size, normalize=True, shuffle=True, device=None):
     dataset, normalizer = get_trajectory_dataset(state_dicts, normalize=normalize)
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    generator = torch.Generator(device=device)  # CUDA
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, generator=generator)
     return data_loader, normalizer
 
-
-########################################################################################################################
-#
-# # Функция для расчёта mean и std
-# def calculate_mean_std(state_dicts):
-#     keys = list(state_dicts[0].keys())
-#     mean_values, std_values = [], []
-#
-#     for key in keys:
-#         values = [state_dict[key].float().view(1, -1) for state_dict in state_dicts]
-#         mean = torch.mean(torch.stack(values), dim=0)
-#         std = torch.std(torch.stack(values), dim=0)
-#
-#         mean_values.append(mean)
-#         std_values.append(std)
-#
-#     mean_flattened_vector = torch.cat(mean_values, dim=1).view(-1)
-#     std_flattened_vector = torch.cat(std_values, dim=1).view(-1)
-#
-#     return mean_flattened_vector, std_flattened_vector
-#
-#
-# class ModelParamsDataset(Dataset):
-#     def __init__(self, state_dicts, transform=None):
-#         self.state_dicts = state_dicts
-#         self.transform = transform
-#
-#     def __len__(self):
-#         return len(self.state_dicts)
-#
-#     def __getitem__(self, idx):
-#         state_dict = self.state_dicts[idx]
-#         params = [v.float().view(-1) for v in state_dict.values()]
-#         data = torch.cat(params)
-#
-#         if self.transform:
-#             data = self.transform(data)
-#
-#         return data
-#
-#
-# def get_trajectory_dataset(state_dicts, normalize=True):
-#     mean, std = calculate_mean_std(state_dicts)
-#     normalizer = NormalizeModelParameters(mean, std)
-#     return ModelParamsDataset(state_dicts, transform=normalizer if normalize else None), normalizer
-#
-#
-# def get_trajectory_dataloader(state_dicts, batch_size, normalize=True, shuffle=True):
-#     dataset, normalizer = get_trajectory_dataset(state_dicts, normalize=normalize)
-#     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-#     return data_loader, normalizer
-#
-########################################################################################################################
 
 def get_anchor_dataloader(dataset, subset=None):
     if subset is None:
