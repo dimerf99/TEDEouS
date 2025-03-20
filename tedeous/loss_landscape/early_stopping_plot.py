@@ -55,8 +55,9 @@ class EarlyStopping(Callback):
             self.wait = 0
             self.best_epoch = self.model.epoch
             self.best_model = self.model.AE_model
-            create_directory_if_not_exists(self.model.path_to_plot_model)
-            torch.save(self.best_model.state_dict(), self.model.path_to_plot_model)
+            if self.model.path_to_plot_model is not None:
+                create_directory_if_not_exists(self.model.path_to_plot_model)
+                torch.save(self.best_model.state_dict(), self.model.path_to_plot_model)
         else:
             self.wait += 1
             if self.wait >= self.patience:
@@ -67,6 +68,7 @@ class EarlyStopping(Callback):
         if self.stopped_epoch > 0:
             print("Epoch {}: early stopping".format(self.stopped_epoch))
         print("best model captured at epoch {} with loss={:.4f}".format(self.best_epoch, self.best))
-        create_directory_if_not_exists(self.model.path_to_plot_model)
-        torch.save(self.model.AE_model.state_dict(), self.model.path_to_plot_model)
+        if self.model.path_to_plot_model is not None:
+            create_directory_if_not_exists(self.model.path_to_plot_model)
+            torch.save(self.model.AE_model.state_dict(), self.model.path_to_plot_model)
         return self.model.AE_model
