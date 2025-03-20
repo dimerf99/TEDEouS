@@ -6,9 +6,13 @@ import torch
 import os
 import itertools
 from typing import Union, List, Any
+from collections import OrderedDict
 
 from tedeous.callbacks.callback_list import CallbackList
 from tedeous.optimizers.optimizer import Optimizer
+
+from tedeous.loss_landscape.early_stopping_plot import EarlyStopping
+
 import warnings
 
 warnings.filterwarnings("ignore", message="The frame.append method is deprecated")
@@ -28,8 +32,8 @@ class VisualizationModel:
                  mode: str,
                  num_of_layers: int,
                  layers_AE: list,
-                 # path_to_plot_model: str,
-                 # path_to_trajectories: str,
+                 path_to_plot_model: str = None,
+                 path_to_trajectories: str = None,
                  num_models: int = None,
                  from_last: bool = False,
                  prefix: str = 'model-',
@@ -43,7 +47,7 @@ class VisualizationModel:
                  polars_weight: float = 0.0,
                  wellspacedtrajectory_weight: float = 0.0,
                  gridscaling_weight: float = 0.0,
-                 #  resume: bool = False
+                 # resume: bool = False
                  ):
 
         """
@@ -72,11 +76,12 @@ class VisualizationModel:
         self.num_of_layers = num_of_layers
         self.layers_AE = layers_AE
         self.AE_model = None
-        # self.path_to_plot_model = path_to_plot_model
+        self.path_to_plot_model = path_to_plot_model
         self.latent_dim = 2
+        self.rec_weight = rec_weight
 
         # Data-related arguments
-        # self.path_to_trajectories = path_to_trajectories
+        self.path_to_trajectories = path_to_trajectories
         self.num_models = num_models
         self.from_last = from_last
         self.prefix = prefix
@@ -87,22 +92,13 @@ class VisualizationModel:
         self.d_max_latent = d_max_latent
         self.anchor_mode = anchor_mode
 
-        # self.path_to_plot_model_directory = os.path.dirname(self.path_to_plot_model)
-        # if not os.path.exists(self.path_to_plot_model_directory):
-        #     os.makedirs(self.path_to_plot_model_directory)
+        if self.path_to_plot_model is None:
+            self.path_to_plot_model_directory = None
+        else:
+            self.path_to_plot_model_directory = os.path.dirname(self.path_to_plot_model)
 
-        # # Convert args to JSON format
-        # args_dict = vars(self)  # Convert Namespace object to dictionary
-
-        # json_str = json.dumps(args_dict, indent=4)  # Convert dictionary to JSON string
-
-        # Save JSON to file
-        # with open(os.path.join(self.path_to_plot_model_directory, 'args.json'), 'w') as f:
-        #     f.write(json_str)
-
-        # Weights
         self.loss_dict = {
-            'rec': {'official_name': "Reconstruction loss", 'weight': rec_weight},
+            'rec': {'official_name': "Reconstruction loss", 'weight': self.rec_weight},
             'anchor': {'official_name': "Anchor loss", 'weight': anchor_weight},
             'lastzero': {'official_name': "LastZero loss", 'weight': lastzero_weight},
             'polars': {'official_name': "Polar loss", 'weight': polars_weight},
@@ -113,13 +109,15 @@ class VisualizationModel:
         self.isEnabled = lambda loss: self.loss_dict[loss]['weight'] > 0
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def get_files_and_compile_train_mode(self, batch_size: int = 32, state_dicts: dict = None):
+    def get_files_and_compile_train_mode(self,
+                                         batch_size: int = 32,
+                                         solver_models: List[torch.nn.Module] = None):
         """Get models files anf complile for training process.
 
         Args:
             batch_size (int, optional): Batch size for dataloader. Defaults to 32"""
 
-        if state_dicts is None:
+        if solver_models is None:
             pt_files = get_files(self.path_to_trajectories, self.num_models, prefix=self.prefix,
                                  from_last=self.from_last,
                                  every_nth=self.every_nth)
@@ -135,35 +133,19 @@ class VisualizationModel:
             print("input_dim: ", input_dim)
 
         else:
-            print("Using provided state_dicts instead of loading from files.")
-
-            # # Check
-            # current_weights = []
-            # for k, v in state_dict.items():
-            #     current_weights.append(v.float().view(-1))
-            #
-            # a = current_weights
-
-            # weight_tensors = [torch.cat([v.float().view(-1) for k, v in state_dict.items()])
-            #                   for state_dict in state_dicts]
-
-            rec_data_loader, transform = get_trajectory_dataloader(state_dicts, batch_size)
+            solver_models_state_dicts = [solver_model.state_dict() for solver_model in solver_models]
+            rec_data_loader, transform = get_trajectory_dataloader(
+                solver_models_state_dicts, batch_size, device=self.device
+            )
             self.loss_dict['rec']['dataloader'] = rec_data_loader
 
             dataset = rec_data_loader.dataset
 
-            # for data in dataset:
-            #     print(data)
-
             input_dim = dataset[0].shape[0]
 
-            print('number of models considered: ', len(dataset))
-            print("input_dim: ", input_dim)
-
-            # dataset = torch.utils.data.TensorDataset(torch.stack(weight_tensors))  # <-- ERROR HERE!!!
-            # dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
-            #
-            # self.loss_dict['rec']['dataloader'] = dataloader
+            print('\nAutoencoder training')
+            print('Number of models considered: ', len(dataset))
+            print("Input_dim: ", input_dim)
 
         if self.isEnabled('anchor'):
             anchor_dataloader = get_anchor_dataloader(dataset, range_of_files_for_anchor)
@@ -204,7 +186,7 @@ class VisualizationModel:
               batch_size: int,
               resume: bool,
               callbacks: Union[List, None] = None,
-              saved_model: torch.Tensor = None):
+              solver_models: List[torch.nn.Module] = None):
 
         """Train model.
 
@@ -217,17 +199,19 @@ class VisualizationModel:
         callbacks (Union[List, None], optional): A list of callback objects used to manage the training process. Defaults to None.
         """
 
-        input_dim = self.get_files_and_compile_train_mode(batch_size, state_dicts=saved_model)
+        input_dim = self.get_files_and_compile_train_mode(batch_size, solver_models=solver_models)
 
         best_AE_model = None
 
+        # CORRECT!
         if self.AE_model is None:
             self.AE_model = UniformAutoencoder(input_dim, self.num_of_layers, self.latent_dim, h=self.layers_AE).to(
                 self.device)
         else:
             best_AE_model = self.AE_model
 
-        a = self.AE_model.state_dict()
+        # self.AE_model = UniformAutoencoder(input_dim, self.num_of_layers, self.latent_dim, h=self.layers_AE).to(
+        #     self.device)
 
         self.optimizer = optimizer.optimizer_choice(self.mode, self.AE_model)
 
@@ -236,25 +220,7 @@ class VisualizationModel:
 
         def cycle_dataloader(dataloader):
             """Returns an infinite iterator for a dataloader."""
-            a = type(dataloader)
-            for batch in dataloader:
-                batch = batch.to(self.device)
-                a = 0
-
             return itertools.cycle(iter(dataloader))
-
-        # ERROR ########################################################################################################
-        # # Не сохраняем модель а передаём её в переменной дальше для генерации тензора поверхности ошибки
-        # if (not os.path.exists(self.path_to_plot_model)) and resume:
-        #     raise "Can't resume without a model"
-        ################################################################################################################
-
-        # ERROR ########################################################################################################
-        # # Не сохраняем модель а передаём её в переменной дальше для генерации тензора поверхности ошибки
-        # if os.path.exists(self.path_to_plot_model):
-        #     self.AE_model.load_state_dict(torch.load(self.path_to_plot_model, weights_only=True))
-        #     best_AE_model = self.AE_model
-        ################################################################################################################
 
         if (best_AE_model is not None) and (not resume):
             raise "There is a model already. Use --resume to update it."
@@ -291,27 +257,11 @@ class VisualizationModel:
                     data = {}
                     for i in self.loss_dict.keys():
                         if self.isEnabled(i):
-                            b = iterators[i]
-                            c = iterators[i]['iterator']
-                            e = list(iterators[i]['iterator'].to(self.device))
-
-                            # # Не работает
-                            # data[i] = next(iterators[i]['iterator']).to(self.device)
-
                             data[i] = next(iterators[i]['iterator'])
 
                     if self.isEnabled('rec'):
-                        # в это место нужно передавать модели из цикла обучения PINN
-                        # модель передавать нужно в качестве тензора по такому пути:
-                        # model -> environment -> visualization_model
-                        if saved_model is None:
-                            data['rec'] = data['rec'].to(self.device).float()
-                            x_recon, z = self.AE_model(data['rec'])
-                        else:
-                            # Здесь нужно учесть батчи, т.к. подаётся не вся модель полностью,
-                            # т.е. не вся saved_model
-                            x_recon, z = self.AE_model(saved_model)
-                        loss_t = 0
+                        data['rec'] = data['rec'].to(self.device).float()
+                        x_recon, z = self.AE_model(data['rec'])
                         losses['rec'] = rec_loss_function(x_recon, data['rec'], z)
 
                     if self.isEnabled('anchor'):
@@ -388,15 +338,20 @@ class VisualizationModel:
 
                 print(printed_string)
 
-                df_losses.to_csv(os.path.join(self.path_to_plot_model_directory, 'losses.csv'), index=False)
+                if self.path_to_plot_model_directory is not None:
+                    df_losses.to_csv(os.path.join(self.path_to_plot_model_directory, 'losses.csv'), index=False)
+
                 filtered_columns = ['epoch', 'Total loss']
                 for i in losses.keys():
                     filtered_columns = filtered_columns + [self.loss_dict[i]['official_name']]
 
-        plot_losses(df_losses[filtered_columns], every_epoch, self.path_to_plot_model_directory)
-        best_AE_model = callbacks.on_train_end()
+        if self.path_to_plot_model_directory is not None:
+            plot_losses(df_losses[filtered_columns], every_epoch, self.path_to_plot_model_directory)
 
-        best_AE_model_weights = copy.deepcopy(self.AE_model.state_dict())
+        callbacks.on_train_end()
 
-        if saved_model is not None:
-            return best_AE_model_weights
+        # best_AE_model_weights = copy.deepcopy(self.AE_model.state_dict())
+        best_AE_model = copy.deepcopy(self.AE_model)
+
+        if solver_models is not None:
+            return best_AE_model
