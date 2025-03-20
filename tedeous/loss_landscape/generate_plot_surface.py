@@ -11,12 +11,11 @@ from matplotlib.colors import LogNorm, NoNorm
 from typing import List
 from collections import OrderedDict
 
-from tedeous.loss_landscape.AEmodel import UniformAutoencoder
+# from tedeous.loss_landscape.AEmodel import UniformAutoencoder
 from tedeous.loss_landscape.trajectories_data import get_trajectory_dataloader
-from tedeous.loss_landscape.loss_landscape_utils import get_density, get_files, repopulate_model
-from landscape_visualization._aux.PINN_loss_data import PINNLossData, get_PINN
+from tedeous.loss_landscape.loss_landscape_utils import get_density, repopulate_model
+from tedeous.loss_landscape.PINN_loss_data import PINNLossData, get_PINN
 
-# from tedeous.model import Model
 import tedeous.model as model
 from tedeous.data import Domain, Conditions, Equation
 
@@ -147,7 +146,6 @@ class PlotLossSurface:
             solver_models_state_dicts, self.batch_size
         )
         trajectory_dataset = trajectory_data_loader.dataset
-        # input_dim = trajectory_dataset[0].shape[0]
 
         best_model = self.AE_model
 
@@ -165,7 +163,6 @@ class PlotLossSurface:
             model_repopulated = repopulate_model(model_flattened, get_PINN(PINN_layers, self.device))
             model_repopulated = model_repopulated.to(self.device)
 
-            # change Model with model_tedeous object
             equation_model = model.Model(model_repopulated, domain, equation, boundaries)
             equation_model.compile('autograd', lambda_operator=1, lambda_bound=100)
 
