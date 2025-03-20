@@ -287,7 +287,8 @@ def wave_1d_basic_experiment(grid_res):
         "batch_size": 32,
         "every_epoch": 100,
         "learning_rate": 5e-4,
-        "resume": True
+        "resume": True,
+        "finetune_AE_model": False
     }
 
     loss_surface_params = {
