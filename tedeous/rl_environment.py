@@ -99,6 +99,7 @@ class EnvRLOptimizer(gym.Env):
         every_epoch = self.AE_train_params['every_epoch']
         learning_rate = self.AE_train_params['learning_rate']
         resume = self.AE_train_params['resume']
+        finetune_AE_model = self.AE_train_params['finetune_AE_model']
 
         optimizer = Optimizer('RMSprop', {'lr': learning_rate}, cosine_scheduler_patience=cosine_scheduler_patience)
         cb_es = EarlyStopping(patience=patience_scheduler)
@@ -107,7 +108,8 @@ class EnvRLOptimizer(gym.Env):
         # которые нужно передать дальше в PlotLossSurface для генерации состояния и отрисовки поверхности
 
         AEmodel = self.visualization_model.train(
-            optimizer, epochs, every_epoch, batch_size, resume, callbacks=[cb_es], solver_models=self.solver_models
+            optimizer, epochs, every_epoch, batch_size, resume,
+            callbacks=[cb_es], solver_models=self.solver_models, finetune_AE_model=finetune_AE_model
         )
 
         self.loss_surface_params['solver_models'] = self.solver_models
