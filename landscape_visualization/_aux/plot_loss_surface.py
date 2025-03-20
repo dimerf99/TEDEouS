@@ -164,8 +164,9 @@ class PlotLossSurface:
                                  from_last=self.from_last,
                                  every_nth=self.every_nth)
 
-            trajectory_data_loader, transform = get_trajectory_dataloader(pt_files, self.batch_size,
-                                                                          self.path_to_plot_model)
+            trajectory_data_loader, transform = get_trajectory_dataloader(
+                self.batch_size, pt_files=pt_files
+            )
             trajectory_dataset = trajectory_data_loader.dataset
             input_dim = trajectory_dataset[0].shape[0]
 
