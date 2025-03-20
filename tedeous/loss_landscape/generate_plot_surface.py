@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.colors import LogNorm, NoNorm
+from typing import List
 from collections import OrderedDict
 
 from tedeous.loss_landscape.AEmodel import UniformAutoencoder
@@ -16,6 +17,7 @@ from tedeous.loss_landscape.loss_landscape_utils import get_density, get_files, 
 from landscape_visualization._aux.PINN_loss_data import PINNLossData, get_PINN
 
 # from tedeous.model import Model
+import tedeous.model as model
 from tedeous.data import Domain, Conditions, Equation
 
 
@@ -23,8 +25,10 @@ class PlotLossSurface:
     """Class for preprocessing plot loss surface"""
 
     def __init__(self,
-                 # path_to_plot_model: str,
-                 # path_to_trajectories: str,
+                 path_to_plot_model: str = None,
+                 path_to_trajectories: str = None,
+                 solver_models: List[torch.nn.Module] = None,
+                 AE_model: torch.nn.Module = None,
                  key_models: list = None,
                  key_modelnames: list = None,
                  prefix: str = "model-",
@@ -44,14 +48,16 @@ class PlotLossSurface:
                  density_p: float = 2,
                  density_vmax: float = -1,
                  density_vmin: float = -1,
-                 colorFromGridOnly: bool = True
-
+                 colorFromGridOnly: bool = True,
+                 img_dir: str = None
                  ):
 
         """
         Args:
             path_to_plot_model (str): Path to the saved model file used for plotting.
             path_to_trajectories (str): Path to the directory containing models trajectory.
+            solver_model_weights (List[OrderedDict]): weights of solver model. Defaults to None.
+            AE_model_weights (List[OrderedDict]): weights of autoencoder model. Defaults to None.
             key_models (list, optional): List of indices of key models to highlight during plotting. Defaults to None.
             key_modelnames (list, optional): List of names corresponding to the key models. Defaults to None.
             prefix (str, optional): Prefix used to identify model files in the directory. Defaults to "model-".
@@ -72,11 +78,13 @@ class PlotLossSurface:
             density_vmax (float, optional): Maximum density value for visualization. Defaults to -1.
             density_vmin (float, optional): Minimum density value for visualization. Defaults to -1.
             colorFromGridOnly (bool, optional): Whether to derive color limits only from the grid data. Defaults to True.
+            img_dir (str, optional): directory title where plots are being saved. Defaults to None.
         """
 
-        self.current_weights = torch.randn(2, 3)
-        # self.path_to_plot_model = path_to_plot_model
-        # self.path_to_trajectories = path_to_trajectories
+        self.path_to_plot_model = path_to_plot_model
+        self.path_to_trajectories = path_to_trajectories
+        self.solver_models = solver_models
+        self.AE_model = AE_model
         self.key_models = key_models
         self.key_modelnames = key_modelnames
         self.prefix = prefix
@@ -98,18 +106,9 @@ class PlotLossSurface:
         self.density_vmin = density_vmin
         self.colorFromGridOnly = colorFromGridOnly
         self.latent_dim = 2
+        self.img_dir = img_dir
         self.loss_dict = {}
-
-        # self.path_to_plot_model_directory = os.path.dirname(self.path_to_plot_model)
-        # if not os.path.exists(self.path_to_plot_model_directory):
-        #     os.makedirs(self.path_to_plot_model_directory)
-
-        # # Convert args to JSON format
-        # args_dict = vars(self)  # Convert Namespace object to dictionary
-        # json_str = json.dumps(args_dict, indent=4)  # Convert dictionary to JSON string
-        # # Save JSON to file
-        # with open(os.path.join(self.path_to_plot_model_directory, 'plotting_args.json'), 'w') as f:
-        #     f.write(json_str)
+        self.counter = 1
 
         self.min_x, self.max_x, self.xnum = self.x_range
         self.step_size = (self.max_x - self.min_x) / self.xnum
@@ -131,8 +130,6 @@ class PlotLossSurface:
         Returns:
                 torch.Tensor: The computed error value based on the specified `error_type`.
         """
-        a = loss_dict
-
         if error_type == "u":
             error = torch.sqrt(torch.mean((self.u_exact_test - model(self.grid_test).reshape(-1)) ** 2))
         if error_type == "loss_oper":
@@ -145,21 +142,14 @@ class PlotLossSurface:
 
     def get_trajectories_and_load_model(self):
         """Get trajectories files, load model and make dataset."""
-        # pt_files = get_files(self.path_to_trajectories, self.num_models, prefix=self.prefix, from_last=self.from_last,
-        #                      every_nth=self.every_nth)
-
-        trajectory_data_loader, transform = get_trajectory_dataloader(self.current_weights, self.batch_size)
+        solver_models_state_dicts = [solver_model.state_dict() for solver_model in self.solver_models]
+        trajectory_data_loader, transform = get_trajectory_dataloader(
+            solver_models_state_dicts, self.batch_size
+        )
         trajectory_dataset = trajectory_data_loader.dataset
-        input_dim = trajectory_dataset[0].shape[0]
+        # input_dim = trajectory_dataset[0].shape[0]
 
-        ########## MODEL
-        # load the model
-        best_model = UniformAutoencoder(input_dim, self.num_of_layers, self.latent_dim, h=self.layers_AE).to(
-            self.device)
-
-        # Здесь мы добавляем модель прямо после обучения из файла visualization_model.py
-        # Далее в случае если автоэнкодер уже обучен, нужно дообучать его при использовании следующих оптимизаторов
-        best_model.load_state_dict(torch.load(self.path_to_plot_model, map_location=torch.device('cpu')))
+        best_model = self.AE_model
 
         self.best_model = best_model.to(self.device)
         self.best_model.eval()
@@ -176,8 +166,8 @@ class PlotLossSurface:
             model_repopulated = model_repopulated.to(self.device)
 
             # change Model with model_tedeous object
-            equation_model = Model(model_repopulated, domain, equation, boundaries)
-            equation_model.compile('autograd', lambda_operator=1 / 2, lambda_bound=1 / 2)
+            equation_model = model.Model(model_repopulated, domain, equation, boundaries)
+            equation_model.compile('autograd', lambda_operator=1, lambda_bound=100)
 
             loss_compute = PINNLossData(equation_model.solution_cls)
             self.loss_dict = loss_compute.evaluate(save_graph=False)
@@ -205,26 +195,6 @@ class PlotLossSurface:
 
         """
 
-        # print("Get coordinates and losses of trajectories")
-        # trajectory_coordinates = []
-        # trajectory_dataset_samples = []
-        # trajectory_coordinates_rec = []
-        # with torch.no_grad():
-        #     for batch_idx, data in enumerate(self.trajectory_dataset):
-        #         data = data.to(self.device).view(1, -1).float()
-        #
-        #         x_recon, z = self.best_model(data)
-        #
-        #         trajectory_coordinates.append(z)
-        #         trajectory_coordinates_rec.append(x_recon)
-        #         trajectory_dataset_samples.append(data)
-        # trajectory_coordinates = torch.cat(trajectory_coordinates, dim=0).cpu()
-        # trajectory_models = torch.cat(trajectory_coordinates_rec, dim=0).cpu()
-        # original_models = torch.cat(trajectory_dataset_samples, dim=0).cpu()
-        #
-        # trajectory_models = trajectory_models * self.transform.std + self.transform.mean
-        # original_models = original_models * self.transform.std + self.transform.mean
-
         print("Get coordinates and losses of trajectories")
         trajectory_coordinates = []
         trajectory_dataset_samples = []
@@ -244,52 +214,19 @@ class PlotLossSurface:
         original_models = torch.cat(trajectory_dataset_samples, dim=0).cpu()
 
         # Денормализация данных
-        trajectory_models = trajectory_models * self.transform.std + self.transform.mean
-        original_models = original_models * self.transform.std + self.transform.mean
+        trajectory_models = trajectory_models * self.transform.std.cpu() + self.transform.mean.cpu()
+        original_models = original_models * self.transform.std.cpu() + self.transform.mean.cpu()
 
         # Вычисление ошибки для моделей в траектории
         trajectory_losses = self.compute_losses(trajectory_models, domain, equation, boundaries, PINN_layers)
         original_trajectory_losses = self.compute_losses(original_models, domain, equation, boundaries, PINN_layers)
-
-        # trajectory_losses = []
-        # for i in range(trajectory_models.shape[0]):
-        #     model_flattened = trajectory_models[i, :]
-        #     model_repopulated = repopulate_model(model_flattened, get_PINN(PINN_layers, self.device))
-        #     # model_repopulated.eval()
-        #     model_repopulated = model_repopulated.to(self.device)
-        #     ####
-        #     equation_model = Model(model_repopulated, domain, equation, boundaries)
-        #     equation_model.compile('autograd', lambda_operator=1 / 2, lambda_bound=1 / 2)
-        #     loss_compute = PINNLossData(equation_model.solution_cls)
-        #     loss_dict = loss_compute.evaluate(save_graph=False)
-        #     loss = self.get_errors(model_repopulated, self.loss_type, loss_dict).detach()
-        #     ####
-        #     trajectory_losses.append(loss)
-        # trajectory_losses = torch.stack(trajectory_losses)
-        #
-        # original_trajectory_losses = []
-        # for i in range(original_models.shape[0]):
-        #     model_flattened = original_models[i, :]
-        #     model_repopulated = repopulate_model(model_flattened, get_PINN(PINN_layers, self.device))
-        #     model_repopulated = model_repopulated.to(self.device)
-        #     ####
-        #     equation_model = Model(model_repopulated, domain, equation, boundaries)
-        #     equation_model.compile('autograd', lambda_operator=1 / 2, lambda_bound=1 / 2)
-        #     loss_compute = PINNLossData(equation_model.solution_cls)
-        #     loss_dict = loss_compute.evaluate(save_graph=False)
-        #     loss = self.get_errors(model_repopulated, self.loss_type, loss_dict).detach()
-        #     ####
-        #     original_trajectory_losses.append(loss)
-        # original_trajectory_losses = torch.stack(original_trajectory_losses)
-
-        # self.loss_dict = loss_dict
 
         return trajectory_losses, original_trajectory_losses, trajectory_coordinates
 
     def get_loss_dict(self):
         return self.loss_dict
 
-    def get_coordinates_and_losses_of_surface(self, grid, domain, equation, boundaries, PINN_layers, AEmodel_weights):
+    def get_coordinates_and_losses_of_surface(self, domain, equation, boundaries, PINN_layers):
         """Get coordinates and losses of surface.
 
         Args:
@@ -384,9 +321,17 @@ class PlotLossSurface:
             d = (data_unnormalized - x_recon_unnormalized).pow(2).sum().sqrt()
             ds.append(d)
 
+            import hashlib
+
+            # def model_hash(model):
+            #     state_dict = model.state_dict()
+            #     state_bytes = str(state_dict).encode()
+            #     return hashlib.md5(state_bytes).hexdigest()[:8]  # Обрезаем до 8 символов
+
             row = {
                 'index': batch_idx,
-                'file': os.path.basename(self.trajectory_dataset.file_paths[batch_idx]),
+                # 'file': os.path.basename(self.trajectory_dataset.current_weighs[batch_idx]),
+                # 'file': model_hash(self.trajectory_dataset[batch_idx]),
                 'x': z[0].detach().cpu().numpy(),
                 'y': z[1].detach().cpu().numpy(),
                 'dists_param_space': d.item(),
@@ -404,8 +349,8 @@ class PlotLossSurface:
         # Append the mean row to the original DataFrame
         df = pd.concat([df, mean_row], ignore_index=True)
 
-        df.to_csv(os.path.join(self.path_to_plot_model_directory,
-                               'summary_' + self.loss_name + '_' + self.loss_type + '.csv'),
+        df.to_csv(os.path.join(self.img_dir,
+                               'summary_' + self.loss_name + '_' + self.loss_type + f'_opt_{self.counter}' + '.csv'),
                   quoting=csv.QUOTE_NONNUMERIC, index=False)
         ds = torch.stack(ds)
 
@@ -444,7 +389,7 @@ class PlotLossSurface:
                               trajectory_coordinates[:, 1].detach().cpu().numpy(), c='0.5', marker='o', s=9, zorder=100)
         cbar.ax.set_ylabel("Density")
 
-        fig.savefig(os.path.join(self.path_to_plot_model_directory, 'map_' + self.loss_type + '_grid_density.pdf'),
+        fig.savefig(os.path.join(self.img_dir, 'map_' + self.loss_type + f'_opt_{self.counter}' + '_grid_density.pdf'),
                     dpi=300, bbox_inches='tight', format='pdf')
         fig.show()
 
@@ -524,14 +469,15 @@ class PlotLossSurface:
             cbar = plt.colorbar(scatter, shrink=0.6)
             cbar.ax.set_ylabel(name_map[plot_])
 
-            fig.savefig(os.path.join(self.path_to_plot_model_directory,
-                                     'map_' + self.loss_type + '_' + self.loss_name + '_' + plot_ + '.pdf'), dpi=300,
+            fig.savefig(os.path.join(self.img_dir,
+                                     'map_' + self.loss_type + '_' + self.loss_name + '_' + plot_ +
+                                     f'_opt_{self.counter}' + '.pdf'), dpi=300,
                         bbox_inches='tight', format='pdf')
 
             fig.show()
 
-    def plotting_equation_loss_surface(self, u_exact_test: torch.Tensor, grid_test: torch.Tensor, grid: torch.Tensor,
-                                       domain: Domain, equation: Equation, boundaries: Conditions, PINN_layers: list):
+    def plotting_equation_loss_surface(self, domain: Domain, equation: Equation, boundaries: Conditions,
+                                       PINN_layers: list):
 
         """Preprocessing for plotting.
 
@@ -544,32 +490,18 @@ class PlotLossSurface:
             conditions (Conditions): object of class Conditions
             PINN_layers (list): list of layers used for repopulating models.
         """
-
-        self.grid_test = grid_test
-        self.u_exact_test = u_exact_test
-
         trajectory_losses, original_trajectory_losses, trajectory_coordinates = self.get_coordinates_and_losses_of_trajectories(
-            grid, domain, equation, boundaries, PINN_layers)
-        grid_losses, grid_xx, grid_yy, rec_grid_models = self.get_coordinates_and_losses_of_surface(grid, domain,
-                                                                                                    equation,
-                                                                                                    boundaries,
-                                                                                                    PINN_layers)
+            domain, equation, boundaries, PINN_layers)
+        grid_losses, grid_xx, grid_yy, rec_grid_models = self.get_coordinates_and_losses_of_surface(
+            domain, equation, boundaries, PINN_layers)
 
         self.plotting(trajectory_losses, original_trajectory_losses, trajectory_coordinates,
                       grid_losses, grid_xx, grid_yy, rec_grid_models)
 
-    def save_equation_loss_surface(self, u_exact_test: torch.Tensor,
-                                   grid_test: torch.Tensor,
-                                   grid: torch.Tensor,
-                                   domain: Domain,
-                                   equation: Equation,
-                                   boundaries: Conditions,
-                                   PINN_layers: list,
-                                   AEmodel_weights: OrderedDict = None):
+    def save_equation_loss_surface(self, domain: Domain, equation: Equation, boundaries: Conditions,
+                                   PINN_layers: list):
         """save_low_dimensional_loss_surface.
         Args:
-            u_exact_test (torch.Tensor): The exact solution of the equation used for computing test errors.
-            grid_test (torch.Tensor): The test grid on which the exact solution and predictions are compared.
             grid (torch.Tensor): discretization of comp-l domain.
             domain (Domain): object of class Domain.
             equation (Equation): object of class Equation
@@ -577,15 +509,11 @@ class PlotLossSurface:
             PINN_layers (list): list of layers used for repopulating models.
             AEmodel_weights (OrderedDict): OrderedDict of weights from saved AEmodel
         """
-
-        self.grid_test = grid_test
-        self.u_exact_test = u_exact_test
-
         trajectory_losses, original_trajectory_losses, trajectory_coordinates = \
-            self.get_coordinates_and_losses_of_trajectories(grid, domain, equation, boundaries, PINN_layers)
+            self.get_coordinates_and_losses_of_trajectories(domain, equation, boundaries, PINN_layers)
 
         grid_losses, grid_xx, grid_yy, rec_grid_models = \
-            self.get_coordinates_and_losses_of_surface(grid, domain, equation, boundaries, PINN_layers, AEmodel_weights)
+            self.get_coordinates_and_losses_of_surface(domain, equation, boundaries, PINN_layers)
 
         raw_state = {
             'grid_losses': grid_losses,
@@ -596,6 +524,6 @@ class PlotLossSurface:
             'trajectory_coordinates': trajectory_coordinates
         }
 
-        torch.save(raw_state, self.path_to_plot_model_directory + '/loss_surface_data.pt')
+        # torch.save(raw_state, self.path_to_plot_model_directory + '/loss_surface_data.pt')
 
         return raw_state
