@@ -185,6 +185,7 @@ class VisualizationModel:
               every_epoch: int,
               batch_size: int,
               resume: bool,
+              finetune_AE_model: bool = False,
               callbacks: Union[List, None] = None,
               solver_models: List[torch.nn.Module] = None):
 
@@ -203,15 +204,11 @@ class VisualizationModel:
 
         best_AE_model = None
 
-        # CORRECT!
-        if self.AE_model is None:
+        if finetune_AE_model and self.AE_model is not None:
+            best_AE_model = self.AE_model
+        else:
             self.AE_model = UniformAutoencoder(input_dim, self.num_of_layers, self.latent_dim, h=self.layers_AE).to(
                 self.device)
-        else:
-            best_AE_model = self.AE_model
-
-        # self.AE_model = UniformAutoencoder(input_dim, self.num_of_layers, self.latent_dim, h=self.layers_AE).to(
-        #     self.device)
 
         self.optimizer = optimizer.optimizer_choice(self.mode, self.AE_model)
 
