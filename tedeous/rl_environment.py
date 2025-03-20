@@ -1,25 +1,13 @@
 import torch
 import gym
-from gym import spaces
-import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Dict, Callable
-from collections import OrderedDict
 
-from tedeous.callbacks.plot import Plots
+from typing import List, Dict, Union
 from tedeous.loss_landscape.generate_plot_surface import PlotLossSurface
 from tedeous.loss_landscape.visualization_model import VisualizationModel
 from tedeous.loss_landscape.early_stopping_plot import EarlyStopping
-
-from tedeous.data import Domain, Conditions, Equation
 from tedeous.optimizers.optimizer import Optimizer
-from tedeous.callbacks import early_stopping
-from tedeous.callbacks.plot import Plots
-
-
-# def load_loss_surface():
-#     """Load loss landscape data."""
-#     return torch.load("loss_surface_data.pt")
+from tedeous.callbacks.callback_list import CallbackList
 
 
 def compute_reward(prev_loss, current_loss, method="diff"):
@@ -42,198 +30,121 @@ def compute_reward(prev_loss, current_loss, method="diff"):
         raise ValueError("Invalid reward method. Use 'diff' or 'absolute'.")
 
 
-class OptimizerEnv(gym.Env):
+class EnvRLOptimizer(gym.Env):
     def __init__(self,
                  optimizer_configs: List[Dict],
-                 loss_surface_params: dict = None,
                  equation_params: list = None,
-                 AE_model_params: dict = None):
-        super(OptimizerEnv, self).__init__()
+                 loss_surface_params: dict = None,
+                 AE_model_params: dict = None,
+                 AE_train_params: dict = None,
+                 callbacks: Union[CallbackList, List, None] = None,
+                 n_save_models: int = None):
+        super(EnvRLOptimizer, self).__init__()
 
-        # raw_state не должен подаваться в окружение.
-        # Он должен генерироваться внутри окружения на основе необходимых параметров,
-        # которые как раз и передаются в окружение.
         self.optimizer_configs = optimizer_configs
-        self.plot_save_ls_params = None
+        self.solver_models = None
+        self.current_loss = None
 
-        path_to_plot_model = r"landscape_visualization\test\landscape_visualization\saved_models\PINN_burgers_adam_state_test\model.pt"
-        path_to_trajectories = r"landscape_visualization\test\landscape_visualization\trajectories\burgers\adam_5_stars"
-
-        if AE_model_params is None:
-            self.AE_model_params = {
-                "mode": "NN",
-                "num_of_layers": 3,
-                "layers_AE": [
-                    991,
-                    125,
-                    15
-                ],
-                # "path_to_plot_model": path_to_plot_model,
-                "num_models": None,
-                "from_last": False,
-                "prefix": "model-",
-                # "path_to_trajectories": path_to_trajectories,
-                "every_nth": 1,
-                "grid_step": 0.1,
-                "d_max_latent": 2,
-                "anchor_mode": "circle",
-                "rec_weight": 10000.0,
-                "anchor_weight": 0.0,
-                "lastzero_weight": 0.0,
-                "polars_weight": 0.0,
-                "wellspacedtrajectory_weight": 0.0,
-                "gridscaling_weight": 0.0
-            }
-        else:
-            self.AE_model_params = AE_model_params
-
-        if loss_surface_params is None:
-            # There are params examples
-            self.loss_surface_params = {
-                "loss_type": "loss_total",
-                "every_nth": 1,
-                "num_of_layers": 3,
-                "layers_AE": [
-                    991,
-                    125,
-                    15
-                ],
-                "batch_size": 32,
-                # "path_to_plot_model": path_to_plot_model,
-                "num_models": None,
-                "from_last": False,
-                "prefix": "model-",
-                # "path_to_trajectories": path_to_trajectories,
-                "loss_name": "loss_total",
-                "x_range": [-1.25, 1.25, 25],
-                "vmax": -1.0,
-                "vmin": -1.0,
-                "vlevel": 30.0,
-                "key_models": None,
-                "key_modelnames": None,
-                "density_type": "CKA",
-                "density_p": 2,
-                "density_vmax": -1,
-                "density_vmin": -1,
-                "colorFromGridOnly": True
-            }
-        else:
-            self.loss_surface_params = loss_surface_params
-
+        self.AE_model_params = AE_model_params
+        self.AE_train_params = AE_train_params
+        self.loss_surface_params = loss_surface_params
         self.equation_params = equation_params
-
-        self.current_optimizer = None
-        self.loss_history = []
-        self.tolerance = 1e-4
-
-        # self.loss_surface = raw_state['grid_losses']
-        # self.grid_xx = raw_state['grid_xx']
-        # self.grid_yy = raw_state['grid_yy']
+        self.callbacks = callbacks
 
         ################################################################################################################
-        # Размерность нужно вытягивать из кода loss landscape и она будет постоянной, т.к.
-        # action_dim - список оптимизаторов, он не меняется
+        # Размерность нужно вытягивать из кода loss landscape, она будет постоянной,
+        # т.к. action_dim - список оптимизаторов, он не меняется
         # state_dim - размерность поверхности, мы используем латентное 2D пространство, для генерации поверхности
 
         self.visualization_model = VisualizationModel(**self.AE_model_params)
         self.plot_loss_surface = None
 
         # Action - selecting an optimizer with its parameters
-        self.action_space = spaces.Discrete(len(self.optimizer_configs))
+        # self.action_space = spaces.Discrete(len(self.optimizer_configs))
+        self.action_space = len(optimizer_configs)
 
-        # # State - error surface (can be an array)
+        # # State - loss surface (can be an array)
         # self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=self.visualization_model.latent_dim,
         #                                     dtype=np.float32)
         self.observation_space = 2
 
+        self.loss_history = []
+        self.tolerance = 1e-4
+        self.counter = 1
+        self.n_save_models = n_save_models
+
         ################################################################################################################
 
-    def reset(self, loss):
+    def reset(self):
         """Reset environment - load error surface, reset history to zero, select starting point."""
-        self.current_error = loss
-        self.error_history.append(self.current_error)
-        return self.loss_surface
+        self.current_loss = self.loss_history[-1]
+        # self.current_optimizer = self.optimizer_configs[self.n_opt]  # must be changed
+        self.counter += 1
 
     # There is action will be update model (not new optimizer, but new model)
     # Last version of signature: def step(self, action: int, weights: torch.Tensor, current_loss: float, params: list):
-    def step(self,
-             weights: List[OrderedDict],
-             current_loss: float):
+    def step(self):
         """Applying an action (optimizer selection) and updating the state."""
-
-        # save_equation_loss_surface function parameters:
-        # u_exact_test = u(grid_test).reshape(-1)
-        grid_res = 50
-        u_exact_test = torch.randn(1).reshape(-1)
-        grid_test = torch.cartesian_prod(torch.linspace(0, 1, grid_res), torch.linspace(0, 1, grid_res))
-
-        # grid, domain, equation, boundaries = problem_formulation(grid_res)  # from any tedeous.example
-        grid, domain, equation, boundaries = self.equation_params
-
-        neurons = 32
-
-        model_layers = [2, neurons, neurons, 1]  # PINN layers
-
-        # # More important parameters
-        # "path_to_plot_model": path_to_plot_model  # we will get this one from Closure update model in real time
-        # "path_to_trajectories": path_to_trajectories
 
         ################################################################################################################
         # There is a training of AE model for create loss landscape
-        batch_size = 32
-        epochs = 600000
-        patience_scheduler = 400000
-        every_epoch = 100
-        cosine_scheduler_patience = 2000
-        learning_rate = 0.0005
-        resume = True
+        AE_params = self.AE_train_params[
+            'first_RL_epoch_AE_params' if len(self.loss_history) == 0 else 'other_RL_epoch_AE_params'
+        ]
+        epochs = AE_params['epochs']
+        patience_scheduler = AE_params['patience_scheduler']
+        cosine_scheduler_patience = AE_params['cosine_scheduler_patience']
+
+        batch_size = self.AE_train_params['batch_size']
+        every_epoch = self.AE_train_params['every_epoch']
+        learning_rate = self.AE_train_params['learning_rate']
+        resume = self.AE_train_params['resume']
 
         optimizer = Optimizer('RMSprop', {'lr': learning_rate}, cosine_scheduler_patience=cosine_scheduler_patience)
         cb_es = EarlyStopping(patience=patience_scheduler)
-        # cb_es = early_stopping.EarlyStopping(patience=patience_scheduler)
 
         # В результате обучения должны выдаваться веса обученного автоэнкодера,
         # которые нужно передать дальше в PlotLossSurface для генерации состояния и отрисовки поверхности
-        AEmodel_weights = self.visualization_model.train(optimizer, epochs, every_epoch, batch_size, resume,
-                                       callbacks=[cb_es], saved_model=weights)
 
-        self.plot_save_ls_params = [u_exact_test, grid_test, grid, domain, equation, boundaries,
-                                    model_layers, AEmodel_weights]
+        AEmodel = self.visualization_model.train(
+            optimizer, epochs, every_epoch, batch_size, resume, callbacks=[cb_es], solver_models=self.solver_models
+        )
+
+        self.loss_surface_params['solver_models'] = self.solver_models
+        self.loss_surface_params['AE_model'] = AEmodel
 
         ################################################################################################################
         self.plot_loss_surface = PlotLossSurface(**self.loss_surface_params)
-        raw_state = self.plot_loss_surface.save_equation_loss_surface(*self.plot_save_ls_params)
+        self.plot_loss_surface.counter = self.counter
 
-        state = raw_state['grid_loss']
+        raw_state = self.plot_loss_surface.save_equation_loss_surface(*self.equation_params)
+        state = raw_state['grid_losses']
 
-        prev_loss = self.loss_history[-1]
-        reward = compute_reward(prev_loss, current_loss)
-        self.loss_history.append(current_loss)
+        if len(self.loss_history) == 0:
+            prev_loss = 0
+        else:
+            prev_loss = self.loss_history[-1]
 
-        done = self.current_error < self.tolerance
+        reward = compute_reward(prev_loss, self.current_loss)
+        self.loss_history.append(self.current_loss)
+
+        done = self.current_loss < self.tolerance
 
         return state, reward, done, {}
 
-    def render(self, img_params: dict = None):
+    def render(self):
         """Display the current error and convergence history."""
 
-        print(f"Optimizer: {self.current_optimizer}, Error: {self.current_error}")
+        self.reset()
 
-        # Plotting solution
-        plot_solution = Plots(**img_params)
-        plot_solution.solution_print(forced_call_flag=True)
+        # print(f"Optimizer: {self.current_optimizer['name']}, Loss: {self.current_loss}")
+
+        # Plotting PDE solution
+        self.callbacks.on_epoch_end()
+        self.callbacks.callbacks[1].save_every = 0.1
 
         # Plotting loss landscape
-        self.plot_loss_surface = PlotLossSurface(**self.loss_surface_params)
-        self.plot_loss_surface.plotting_equation_loss_surface()
-
-        # plt.figure(figsize=(10, 5))
-        # plt.plot(self.loss_history, label='Error')
-        # plt.xlabel("Steps")
-        # plt.ylabel("Loss")
-        # plt.title("Error Dynamics")
-        # plt.legend()
-        # plt.show()
+        self.plot_loss_surface.plotting_equation_loss_surface(*self.equation_params)
 
     def close(self):
         plt.close('all')
