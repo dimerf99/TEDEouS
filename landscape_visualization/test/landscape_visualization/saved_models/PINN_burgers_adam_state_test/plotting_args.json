@@ -1,0 +1,35 @@
+{
+    "path_to_plot_model": "test\\landscape_visualization\\saved_models\\PINN_burgers_adam_state_test\\model.py",
+    "path_to_trajectories": "C:\\Users\\anate\\Documents\\GitHub\\loss_landscape\\torch_DE_solver\\landscape_visualization\\landscape_visualization\\trajectories\\burgers\\adam_state_test",
+    "key_models": null,
+    "key_modelnames": null,
+    "prefix": "model-",
+    "num_models": null,
+    "from_last": false,
+    "vlevel": 30.0,
+    "vmin": -1.0,
+    "vmax": -1.0,
+    "x_range": [
+        -1.25,
+        1.25,
+        25
+    ],
+    "loss_type": "loss_total",
+    "loss_name": "loss_total",
+    "layers_AE": [
+        991,
+        125,
+        15
+    ],
+    "num_of_layers": 3,
+    "batch_size": 32,
+    "every_nth": 1,
+    "density_type": "CKA",
+    "density_p": 2,
+    "density_vmax": -1,
+    "density_vmin": -1,
+    "colorFromGridOnly": true,
+    "latent_dim": 2,
+    "loss_dict": {},
+    "path_to_plot_model_directory": "test\\landscape_visualization\\saved_models\\PINN_burgers_adam_state_test"
+}

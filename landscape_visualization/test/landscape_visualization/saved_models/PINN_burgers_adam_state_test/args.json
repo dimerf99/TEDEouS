@@ -1,0 +1,22 @@
+{
+    "mode": "NN",
+    "num_of_layers": 3,
+    "layers_AE": [
+        991,
+        125,
+        15
+    ],
+    "AE_model": null,
+    "path_to_plot_model": "test\\landscape_visualization\\saved_models\\PINN_burgers_adam_state_test\\model.py",
+    "latent_dim": 2,
+    "rec_weight": 1.0,
+    "path_to_trajectories": "C:\\Users\\anate\\Documents\\GitHub\\loss_landscape\\torch_DE_solver\\landscape_visualization\\landscape_visualization\\trajectories\\burgers\\adam_state_test",
+    "num_models": null,
+    "from_last": false,
+    "prefix": "model-",
+    "every_nth": 1,
+    "grid_step": 0.1,
+    "d_max_latent": 2,
+    "anchor_mode": "circle",
+    "path_to_plot_model_directory": "test\\landscape_visualization\\saved_models\\PINN_burgers_adam_state_test"
+}
